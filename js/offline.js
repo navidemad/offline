@@ -2,64 +2,70 @@
   var Offline, checkXHR, defaultOptions, extendNative, grab, handlers, init;
 
   extendNative = function(to, from) {
-    var e, key, val, _results;
-    _results = [];
+    var e, key, results, val;
+    results = [];
     for (key in from.prototype) {
       try {
         val = from.prototype[key];
         if ((to[key] == null) && typeof val !== 'function') {
-          _results.push(to[key] = val);
+          results.push(to[key] = val);
         } else {
-          _results.push(void 0);
+          results.push(void 0);
         }
       } catch (_error) {
         e = _error;
       }
     }
-    return _results;
+    return results;
   };
 
   Offline = {};
 
-  if (Offline.options == null) {
-    Offline.options = {};
-  }
+  Offline.options = window.Offline ? window.Offline.options || {} : {};
 
   defaultOptions = {
     checks: {
       xhr: {
         url: function() {
-          return "/offline-test-request/" + (Math.floor(Math.random() * 1000000000));
-        }
+          return "/favicon.ico?_=" + ((new Date()).getTime());
+        },
+        timeout: 5000,
+        type: 'HEAD'
       },
       image: {
         url: function() {
-          return "http://dqakt69vkj09v.cloudfront.net/are-we-online.gif?_=" + (Math.floor(Math.random() * 1000000000));
+          return "/favicon.ico?_=" + ((new Date()).getTime());
         }
       },
-      active: 'image'
+      active: 'xhr'
     },
     checkOnLoad: false,
-    interceptRequests: true
+    interceptRequests: true,
+    reconnect: true,
+    deDupBody: false
   };
 
   grab = function(obj, key) {
-    var cur, i, part, _i, _len, _ref;
+    var cur, i, j, len, part, parts;
     cur = obj;
-    _ref = key.split('.');
-    for (i = _i = 0, _len = _ref.length; _i < _len; i = ++_i) {
-      part = _ref[i];
+    parts = key.split('.');
+    for (i = j = 0, len = parts.length; j < len; i = ++j) {
+      part = parts[i];
       cur = cur[part];
       if (typeof cur !== 'object') {
         break;
       }
     }
-    return cur;
+    if (i === parts.length - 1) {
+      return cur;
+    } else {
+      return void 0;
+    }
   };
 
   Offline.getOption = function(key) {
-    var val, _ref;
-    val = (_ref = grab(Offline.options, key)) != null ? _ref : grab(defaultOptions, key);
+    var ref, val;
+    val = (ref = grab(Offline.options, key)) != null ? ref : grab(defaultOptions, key);
     if (typeof val === 'function') {
       return val();
     } else {
@@ -102,15 +108,15 @@
   handlers = {};
 
   Offline.on = function(event, handler, ctx) {
-    var e, events, _i, _len, _results;
+    var e, events, j, len, results;
     events = event.split(' ');
     if (events.length > 1) {
-      _results = [];
-      for (_i = 0, _len = events.length; _i < _len; _i++) {
-        e = events[_i];
-        _results.push(Offline.on(e, handler, ctx));
+      results = [];
+      for (j = 0, len = events.length; j < len; j++) {
+        e = events[j];
+        results.push(Offline.on(e, handler, ctx));
       }
-      return _results;
+      return results;
     } else {
       if (handlers[event] == null) {
         handlers[event] = [];
@@ -120,7 +126,7 @@
   };
 
   Offline.off = function(event, handler) {
-    var ctx, i, _handler, _ref, _results;
+    var _handler, ctx, i, ref, results;
     if (handlers[event] == null) {
       return;
     }
@@ -128,34 +134,34 @@
       return handlers[event] = [];
     } else {
       i = 0;
-      _results = [];
+      results = [];
       while (i < handlers[event].length) {
-        _ref = handlers[event][i], ctx = _ref[0], _handler = _ref[1];
+        ref = handlers[event][i], ctx = ref[0], _handler = ref[1];
         if (_handler === handler) {
-          _results.push(handlers[event].splice(i--, 1));
+          results.push(handlers[event].splice(i, 1));
         } else {
-          _results.push(void 0);
+          results.push(i++);
         }
       }
-      return _results;
+      return results;
     }
   };
 
   Offline.trigger = function(event) {
-    var ctx, handler, _i, _len, _ref, _ref1, _results;
+    var ctx, handler, j, len, ref, ref1, results;
     if (handlers[event] != null) {
-      _ref = handlers[event];
-      _results = [];
-      for (_i = 0, _len = _ref.length; _i < _len; _i++) {
-        _ref1 = _ref[_i], ctx = _ref1[0], handler = _ref1[1];
-        _results.push(handler.call(ctx));
+      ref = handlers[event].slice(0);
+      results = [];
+      for (j = 0, len = ref.length; j < len; j++) {
+        ref1 = ref[j], ctx = ref1[0], handler = ref1[1];
+        results.push(handler.call(ctx));
       }
-      return _results;
+      return results;
     }
   };
 
   checkXHR = function(xhr, onUp, onDown) {
-    var checkStatus, _onreadystatechange;
+    var _onerror, _onload, _onreadystatechange, _ontimeout, checkStatus;
     checkStatus = function() {
       if (xhr.status && xhr.status < 12000) {
         return onUp();
@@ -164,9 +170,21 @@
       }
     };
     if (xhr.onprogress === null) {
-      xhr.addEventListener('error', onDown, false);
-      xhr.addEventListener('timeout', onDown, false);
-      return xhr.addEventListener('load', checkStatus, false);
+      _onerror = xhr.onerror;
+      xhr.onerror = function() {
+        onDown();
+        return typeof _onerror === "function" ? _onerror.apply(null, arguments) : void 0;
+      };
+      _ontimeout = xhr.ontimeout;
+      xhr.ontimeout = function() {
+        onDown();
+        return typeof _ontimeout === "function" ? _ontimeout.apply(null, arguments) : void 0;
+      };
+      _onload = xhr.onload;
+      return xhr.onload = function() {
+        checkStatus();
+        return typeof _onload === "function" ? _onload.apply(null, arguments) : void 0;
+      };
     } else {
       _onreadystatechange = xhr.onreadystatechange;
       return xhr.onreadystatechange = function() {
@@ -183,12 +201,20 @@
   Offline.checks = {};
 
   Offline.checks.xhr = function() {
-    var xhr;
+    var e, xhr;
     xhr = new XMLHttpRequest;
     xhr.offline = false;
-    xhr.open('GET', Offline.getOption('checks.xhr.url'), true);
+    xhr.open(Offline.getOption('checks.xhr.type'), Offline.getOption('checks.xhr.url'), true);
+    if (xhr.timeout != null) {
+      xhr.timeout = Offline.getOption('checks.xhr.timeout');
+    }
     checkXHR(xhr, Offline.markUp, Offline.markDown);
-    xhr.send();
+    try {
+      xhr.send();
+    } catch (_error) {
+      e = _error;
+      Offline.markDown();
+    }
     return xhr;
   };
 
@@ -201,6 +227,10 @@
     return void 0;
   };
 
+  Offline.checks.down = Offline.markDown;
+
+  Offline.checks.up = Offline.markUp;
+
   Offline.check = function() {
     Offline.trigger('checking');
     return Offline.checks[Offline.getOption('checks.active')]();
@@ -209,7 +239,7 @@
   Offline.confirmUp = Offline.confirmDown = Offline.check;
 
   Offline.onXHR = function(cb) {
-    var monitorXHR, _XDomainRequest, _XMLHttpRequest;
+    var _XDomainRequest, _XMLHttpRequest, monitorXHR;
     monitorXHR = function(req, flags) {
       var _open;
       _open = req.open;
@@ -228,7 +258,7 @@
     };
     _XMLHttpRequest = window.XMLHttpRequest;
     window.XMLHttpRequest = function(flags) {
-      var req, _overrideMimeType, _setRequestHeader;
+      var _overrideMimeType, _setRequestHeader, req;
       req = new _XMLHttpRequest(flags);
       monitorXHR(req, flags);
       _setRequestHeader = req.setRequestHeader;
@@ -259,11 +289,11 @@
 
   init = function() {
     if (Offline.getOption('interceptRequests')) {
-      Offline.onXHR(function(_arg) {
+      Offline.onXHR(function(arg) {
         var xhr;
-        xhr = _arg.xhr;
+        xhr = arg.xhr;
         if (xhr.offline !== false) {
-          return checkXHR(xhr, Offline.confirmUp, Offline.confirmDown);
+          return checkXHR(xhr, Offline.markUp, Offline.confirmDown);
         }
       });
     }

@@ -5,6 +5,7 @@ held = []
 
 waitingOnConfirm = false
 holdRequest = (req) ->
+  return if Offline.getOption('requests') is false
   Offline.trigger 'requests:capture'
 
   if Offline.state isnt 'down'
@@ -13,6 +14,7 @@ holdRequest = (req) ->
   held.push req
 
 makeRequest = ({xhr, url, type, user, password, body}) ->
+  return if Offline.getOption('requests') is false
   xhr.abort()
   xhr.open(type, url, true, user, password)
   xhr.setRequestHeader(name, val) for name, val of xhr.headers
@@ -26,6 +28,7 @@ clear = ->
   held = []
 
 flush = ->
+  return if Offline.getOption('requests') is false
   Offline.trigger 'requests:flush'
 
   requests = {}
@@ -33,10 +36,18 @@ flush = ->
   # TODO: Throw out PUT/POST/DELETE requests after too much time?
   for request in held
     # Break cache breaking
-    url = request.url.replace /(\?|&)_=[0-9]+/, (match, char) ->
-      if char is '?' then char else ''
+    url = request.url.replace /(\?|&)_=[0-9]+/, (match, chr) ->
+      if chr is '?' then chr else ''
 
-    requests["#{ request.type.toUpperCase() } - #{ url }"] = request
+    if Offline.getOption('deDupBody')
+      body = request.body
+      if body.toString() is '[object Object]'
+        body = JSON.stringify(body)
+      else
+        body = body.toString()
+      requests["#{ request.type.toUpperCase() } - #{ url } - #{ body }"] = request;
+    else
+      requests["#{ request.type.toUpperCase() } - #{ url }"] = request
 
   for key, request of requests
     makeRequest request

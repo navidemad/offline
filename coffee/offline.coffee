@@ -14,31 +14,42 @@ extendNative = (to, from) ->
 
 Offline = {}
 
-Offline.options ?= {}
+Offline.options = if window.Offline then window.Offline.options or {} else {}
 defaultOptions =
   checks:
     xhr:
       url: ->
-        "/offline-test-request/#{ Math.floor(Math.random() * 1000000000) }"
-
+        # This can be any endpoint, even one that will 404.
+        "/favicon.ico?_=#{ (new Date()).getTime() }"
+      timeout: 5000
+      type: 'HEAD'
     image:
       url: ->
-        # This can be any image, feel free to use our ultra-small gif:
-        "http://dqakt69vkj09v.cloudfront.net/are-we-online.gif?_=#{ Math.floor(Math.random() * 1000000000) }"
+        # This can be any image, this is the better option if your image is on a different domain, otherwise just use XHR
+        "/favicon.ico?_=#{ (new Date()).getTime() }"
 
-    active: 'image'
+    active: 'xhr'
 
   checkOnLoad: false
 
   interceptRequests: true
 
+  reconnect: true
+
+  deDupBody: false
+
 grab = (obj, key) ->
   cur = obj
-  for part, i in key.split('.')
+  parts = key.split('.')
+  for part, i in parts
     cur = cur[part]
     break if typeof cur isnt 'object'
-  cur
-  
+
+  if i is parts.length - 1
+    cur
+  else
+    undefined
+
 Offline.getOption = (key) ->
   val = grab(Offline.options, key) ? grab(defaultOptions, key)
 
@@ -98,11 +109,14 @@ Offline.off = (event, handler) ->
     while i < handlers[event].length
       [ctx, _handler] = handlers[event][i]
       if _handler is handler
-        handlers[event].splice i--, 1
+        handlers[event].splice i, 1
+      else
+        i++
 
 Offline.trigger = (event) ->
   if handlers[event]?
-    for [ctx, handler] in handlers[event]
+    # we have to make a copy of the handlers since its possible that the called functions will modify the handlers array by calling off/on 
+    for [ctx, handler] in handlers[event][..]
       handler.call(ctx)
 
 checkXHR = (xhr, onUp, onDown) ->
@@ -114,9 +128,25 @@ checkXHR = (xhr, onUp, onDown) ->
 
   if xhr.onprogress is null
     # onprogress would be undefined on older browsers
-    xhr.addEventListener 'error', onDown, false
-    xhr.addEventListener 'timeout', onDown, false
-    xhr.addEventListener 'load', checkStatus, false
+
+    # XDomainRequest doesn't implement addEventListener
+    _onerror = xhr.onerror
+    xhr.onerror = ->
+      onDown()
+
+      _onerror?(arguments...)
+
+    _ontimeout = xhr.ontimeout
+    xhr.ontimeout = ->
+      onDown()
+
+      _ontimeout?(arguments...)
+
+    _onload = xhr.onload
+    xhr.onload = ->
+      checkStatus()
+
+      _onload?(arguments...)
   else
     _onreadystatechange = xhr.onreadystatechange
     xhr.onreadystatechange = ->
@@ -132,14 +162,21 @@ Offline.checks.xhr = ->
   xhr = new XMLHttpRequest
 
   xhr.offline = false
-  
+
   # It doesn't matter what this hits, even a 404 is considered up.  It is important however that
   # it's on the same domain and port, so CORS issues don't come into play.
-  xhr.open('GET', Offline.getOption('checks.xhr.url'), true)
+  xhr.open(Offline.getOption('checks.xhr.type'), Offline.getOption('checks.xhr.url'), true)
+
+  if xhr.timeout?
+    xhr.timeout = Offline.getOption('checks.xhr.timeout')
 
   checkXHR xhr, Offline.markUp, Offline.markDown
 
-  xhr.send()
+  try
+    xhr.send()
+  catch e
+    # Catch NETWORK_ERRORS
+    Offline.markDown()
 
   xhr
 
@@ -148,8 +185,11 @@ Offline.checks.image = ->
   img.onerror = Offline.markDown
   img.onload = Offline.markUp
   img.src = Offline.getOption('checks.image.url')
-  
+
   undefined
+
+Offline.checks.down = Offline.markDown
+Offline.checks.up = Offline.markUp
 
 Offline.check = ->
   Offline.trigger 'checking'
@@ -204,7 +244,7 @@ init = ->
   if Offline.getOption 'interceptRequests'
     Offline.onXHR ({xhr}) ->
       unless xhr.offline is false
-        checkXHR xhr, Offline.confirmUp, Offline.confirmDown
+        checkXHR xhr, Offline.markUp, Offline.confirmDown
 
   if Offline.getOption 'checkOnLoad'
     Offline.check()
